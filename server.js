@@ -50,7 +50,7 @@ pool.query("SELECT NOW()", (err) => {
 
 // Sync endpoint: clear old rows, then bulk-insert new ones
 app.post("/api/sync", async (req, res) => {
-  const { data, apiKey, tableName, truncateFirst = false } = req.body;
+  const { data, apiKey, tableName } = req.body;
 
   // 1) Authenticate
   if (apiKey !== process.env.API_KEY) {
@@ -79,10 +79,9 @@ app.post("/api/sync", async (req, res) => {
     await client.query("BEGIN");
 
     // 4) clear out old data
-    if (truncateFirst) {
-      logger.info(`Truncating table "${targetTable}" as requested`);
-      await client.query(`DELETE FROM ${targetTable}`);
-    }
+
+    logger.info(`Truncating table "${targetTable}" as requested`);
+    await client.query(`DELETE FROM ${targetTable}`);
 
     // 5) insert in batches
     const chunkSize = 500;
