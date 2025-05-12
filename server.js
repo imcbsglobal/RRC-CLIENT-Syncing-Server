@@ -9,6 +9,14 @@ const cors = require("cors");
 // Load environment variables
 dotenv.config();
 
+// The “default” table name (can be overridden per‐request)
+const DEFAULT_TABLE = process.env.RRC_CLIENTS_TABLE || "rrc_clients";
+
+// Simple validator to allow only letters, numbers and underscores
+function isValidIdentifier(name) {
+  return /^[a-zA-Z0-9_]+$/.test(name);
+}
+
 // Configure logger
 const logger = winston.createLogger({
   level: "info",
@@ -40,14 +48,17 @@ pool.query("SELECT NOW()", (err) => {
   else logger.info("DB connection successful");
 });
 
-// Sync endpoint: delete all old rows, then bulk-insert new ones
+// Sync endpoint: clear old rows, then bulk-insert new ones
 app.post("/api/sync", async (req, res) => {
-  const { data, apiKey } = req.body;
+  const { data, apiKey, tableName, truncateFirst = false } = req.body;
 
+  // 1) Authenticate
   if (apiKey !== process.env.API_KEY) {
     logger.warn(`Bad API key from ${req.ip}`);
     return res.status(401).json({ success: false, message: "Invalid API key" });
   }
+
+  // 2) Validate payload
   if (!Array.isArray(data)) {
     logger.warn("Sync request missing data array");
     return res
@@ -55,26 +66,37 @@ app.post("/api/sync", async (req, res) => {
       .json({ success: false, message: "Invalid data format" });
   }
 
-  logger.info(`Sync received ${data.length} records`);
+  // 3) Determine table to write into
+  const targetTable =
+    tableName && isValidIdentifier(tableName) ? tableName : DEFAULT_TABLE;
+
+  logger.info(
+    `Sync received ${data.length} records for table "${targetTable}"`
+  );
 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    // 1) clear out old data
-    await client.query("TRUNCATE rrc_clients");
+    // 4) clear out old data
+    if (truncateFirst) {
+      logger.info(`Truncating table "${targetTable}" as requested`);
+      await client.query(`TRUNCATE ${targetTable}`);
+    }
 
-    // 2) insert in batches
+    // 5) insert in batches
     const chunkSize = 500;
     let inserted = 0;
+
     for (let i = 0; i < data.length; i += chunkSize) {
       const chunk = data.slice(i, i + chunkSize);
 
-      // build placeholders and values
+      // assume each row has exactly these four fields:
+      // code, name, address, branch
       const valuePlaceholders = [];
       const values = [];
+
       chunk.forEach((row, idx) => {
-        // row: { code, name, address, branch }
         const base = idx * 4;
         valuePlaceholders.push(
           `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4})`
@@ -83,7 +105,7 @@ app.post("/api/sync", async (req, res) => {
       });
 
       const sql = `
-        INSERT INTO rrc_clients (code, name, address, branch)
+        INSERT INTO ${targetTable} (code, name, address, branch)
         VALUES ${valuePlaceholders.join(", ")}
       `;
       await client.query(sql, values);
@@ -91,7 +113,7 @@ app.post("/api/sync", async (req, res) => {
     }
 
     await client.query("COMMIT");
-    logger.info(`Sync complete: inserted ${inserted} rows`);
+    logger.info(`Sync complete: inserted ${inserted} rows into ${targetTable}`);
 
     res.json({ success: true, insertedCount: inserted });
   } catch (err) {
