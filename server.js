@@ -76,7 +76,7 @@ app.post("/api/sync", async (req, res) => {
 
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await client.query(`DELETE FROM ${targetTable}`);
 
     // 4) clear out old data
 
@@ -111,12 +111,12 @@ app.post("/api/sync", async (req, res) => {
       inserted += chunk.length;
     }
 
-    await client.query("COMMIT");
+    //await client.query("COMMIT");
     logger.info(`Sync complete: inserted ${inserted} rows into ${targetTable}`);
 
     res.json({ success: true, insertedCount: inserted });
   } catch (err) {
-    await client.query("ROLLBACK");
+    //await client.query("ROLLBACK");
     logger.error(`Sync failed: ${err.message}`);
     res.status(500).json({ success: false, message: err.message });
   } finally {
