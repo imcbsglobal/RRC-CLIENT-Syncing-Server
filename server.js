@@ -40,7 +40,12 @@ app.use(cors());
 app.use(bodyParser.json({ limit: "50mb" }));
 
 // PostgreSQL pool
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 20, // Increase connection pool size
+  idleTimeoutMillis: 30000, // 30 seconds
+  connectionTimeoutMillis: 2000, // 2 seconds
+});
 
 // Test DB connection on startup
 pool.query("SELECT NOW()", (err) => {
@@ -76,6 +81,9 @@ app.post("/api/sync", async (req, res) => {
 
   const client = await pool.connect();
   try {
+    // Start a transaction
+    await client.query("BEGIN");
+
     // 4) Clear existing data
     await client.query(`DELETE FROM ${targetTable}`);
     logger.info(`Cleared existing data from table "${targetTable}"`);
@@ -95,7 +103,13 @@ app.post("/api/sync", async (req, res) => {
         valuePlaceholders.push(
           `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4})`
         );
-        values.push(row.code, row.name, row.address, row.branch);
+        // Sanitize input: trim whitespace, handle potential undefined
+        values.push(
+          (row.code || "").toString().trim(),
+          (row.name || "").toString().trim(),
+          (row.address || "").toString().trim(),
+          (row.branch || "").toString().trim()
+        );
       });
 
       const sql = `
@@ -106,10 +120,16 @@ app.post("/api/sync", async (req, res) => {
       inserted += chunk.length;
     }
 
+    // Commit the transaction
+    await client.query("COMMIT");
+
     logger.info(`Sync complete: inserted ${inserted} rows into ${targetTable}`);
 
     res.json({ success: true, insertedCount: inserted });
   } catch (err) {
+    // Rollback the transaction in case of error
+    await client.query("ROLLBACK");
+
     logger.error(`Sync failed: ${err.message}`);
     res.status(500).json({ success: false, message: err.message });
   } finally {
@@ -120,9 +140,22 @@ app.post("/api/sync", async (req, res) => {
 // Health check
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
 
+// Error handling middleware
+app.use((err, req, res, next) => {
+  logger.error(`Unhandled error: ${err.message}`);
+  res.status(500).json({ success: false, message: "Internal server error" });
+});
+
 // Start server
 const PORT = process.env.PORT || 5015;
 app.listen(PORT, () => {
   logger.info(`Server listening on port ${PORT}`);
   console.log(`Server running on port ${PORT}`);
+});
+
+// Graceful shutdown
+process.on("SIGINT", async () => {
+  logger.info("Shutting down gracefully");
+  await pool.end();
+  process.exit(0);
 });
