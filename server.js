@@ -9,7 +9,7 @@ const cors = require("cors");
 // Load environment variables
 dotenv.config();
 
-// The “default” table name (can be overridden per‐request)
+// The "default" table name (can be overridden per‐request)
 const DEFAULT_TABLE = process.env.RRC_CLIENTS_TABLE || "rrc_clients";
 
 // Simple validator to allow only letters, numbers and underscores
@@ -48,7 +48,7 @@ pool.query("SELECT NOW()", (err) => {
   else logger.info("DB connection successful");
 });
 
-// Sync endpoint: clear old rows, then bulk-insert new ones
+// Sync endpoint: clear existing data and add all new data
 app.post("/api/sync", async (req, res) => {
   const { data, apiKey, tableName } = req.body;
 
@@ -76,22 +76,17 @@ app.post("/api/sync", async (req, res) => {
 
   const client = await pool.connect();
   try {
+    // 4) Clear existing data
     await client.query(`DELETE FROM ${targetTable}`);
+    logger.info(`Cleared existing data from table "${targetTable}"`);
 
-    // 4) clear out old data
-
-    logger.info(`Truncating table "${targetTable}" as requested`);
-    await client.query(`DELETE FROM ${targetTable}`);
-
-    // 5) insert in batches
+    // 5) Insert all new data in batches
     const chunkSize = 500;
     let inserted = 0;
 
     for (let i = 0; i < data.length; i += chunkSize) {
       const chunk = data.slice(i, i + chunkSize);
 
-      // assume each row has exactly these four fields:
-      // code, name, address, branch
       const valuePlaceholders = [];
       const values = [];
 
@@ -111,12 +106,10 @@ app.post("/api/sync", async (req, res) => {
       inserted += chunk.length;
     }
 
-    //await client.query("COMMIT");
     logger.info(`Sync complete: inserted ${inserted} rows into ${targetTable}`);
 
     res.json({ success: true, insertedCount: inserted });
   } catch (err) {
-    //await client.query("ROLLBACK");
     logger.error(`Sync failed: ${err.message}`);
     res.status(500).json({ success: false, message: err.message });
   } finally {
