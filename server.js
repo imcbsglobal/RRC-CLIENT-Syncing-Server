@@ -81,7 +81,7 @@ app.post("/api/sync", async (req, res) => {
     // 4) clear out old data
     if (truncateFirst) {
       logger.info(`Truncating table "${targetTable}" as requested`);
-      await client.query(`TRUNCATE ${targetTable}`);
+      await client.query(`DELETE FROM ${targetTable}`);
     }
 
     // 5) insert in batches
