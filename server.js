@@ -89,35 +89,94 @@ app.post("/api/sync", async (req, res) => {
     logger.info(`Cleared existing data from table "${targetTable}"`);
 
     // 5) Insert all new data in batches
-    const chunkSize = 500;
+    const chunkSize = 100;
     let inserted = 0;
 
     for (let i = 0; i < data.length; i += chunkSize) {
       const chunk = data.slice(i, i + chunkSize);
 
+      // Define all columns we want to insert
+      const columns = [
+        "code",
+        "name",
+        "address",
+        "branch",
+        "district",
+        "state",
+        "software",
+        "mobile",
+        "installationdate",
+        "priorty",
+        "directdealing",
+        "rout",
+        "amc",
+        "amcamt",
+        "accountcode",
+        "address3",
+        "lictype",
+        "clients",
+        "sp",
+        "nature",
+      ];
+
+      // Build the SQL query with placeholders for each row and each column
+      let placeholderCounter = 1;
       const valuePlaceholders = [];
       const values = [];
 
-      chunk.forEach((row, idx) => {
-        const base = idx * 4;
-        valuePlaceholders.push(
-          `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4})`
-        );
-        // Sanitize input: trim whitespace, handle potential undefined
-        values.push(
-          (row.code || "").toString().trim(),
-          (row.name || "").toString().trim(),
-          (row.address || "").toString().trim(),
-          (row.branch || "").toString().trim()
-        );
+      chunk.forEach((row) => {
+        const rowPlaceholders = [];
+
+        columns.forEach((col) => {
+          rowPlaceholders.push(`$${placeholderCounter}`);
+          placeholderCounter++;
+
+          // Sanitize input and handle special cases
+          let value = row[col] === undefined ? null : row[col];
+
+          // Ensure strings for string columns, convert empty strings to null
+          if (value !== null && col === "installationdate") {
+            // For date fields, keep as is (should be ISO string from Python)
+            value = value;
+          } else if (value !== null && ["amcamt"].includes(col)) {
+            // For numeric fields, ensure numeric
+            value =
+              typeof value === "number"
+                ? value
+                : value === null || value === ""
+                ? null
+                : parseFloat(value) || null;
+          } else if (
+            value !== null &&
+            ["priorty", "clients", "sp"].includes(col)
+          ) {
+            // For integer fields, ensure integer
+            value =
+              typeof value === "number"
+                ? value
+                : value === null || value === ""
+                ? null
+                : parseInt(value) || null;
+          } else if (value !== null) {
+            // For string fields, ensure string and trim
+            value = value.toString().trim();
+            value = value === "" ? null : value;
+          }
+
+          values.push(value);
+        });
+
+        valuePlaceholders.push(`(${rowPlaceholders.join(", ")})`);
       });
 
       const sql = `
-        INSERT INTO ${targetTable} (code, name, address, branch)
+        INSERT INTO ${targetTable} (${columns.join(", ")})
         VALUES ${valuePlaceholders.join(", ")}
       `;
+
       await client.query(sql, values);
       inserted += chunk.length;
+      logger.info(`Inserted batch ${i / chunkSize + 1}: ${chunk.length} rows`);
     }
 
     // Commit the transaction
